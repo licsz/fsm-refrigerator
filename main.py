@@ -1,10 +1,45 @@
 import math
+from tkinter import messagebox, ttk
 import tkinter as tk
 from enum import Enum, auto
 from tkinter import PhotoImage
-
-
+import json
 import winsound
+
+
+
+class Product:
+    def __init__(self, name, category, expiry_date, quantity=None, weight=None):
+        self.name = name
+        self.category = category
+        self.expiry_date = expiry_date
+        if quantity and weight:
+            raise ValueError("Specify either quantity or weight, not both.")
+        if not quantity and not weight:
+            raise ValueError("Specify either quantity or weight.")
+        self.quantity = quantity
+        self.weight = weight
+
+    def to_dict(self):
+        return {
+            "name": self.name,
+            "category": self.category,
+            "expiry_date": self.expiry_date,
+            "quantity": self.quantity,
+            "weight": self.weight
+        }
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            name=data["name"],
+            category=data["category"],
+            expiry_date=data["expiry_date"],
+            quantity=data.get("quantity"),
+            weight=data.get("weight")
+        )
+
+
 
 class Signaling:
     def __init__(self, fsm):
@@ -231,36 +266,121 @@ class Timer:
 class RefrigeratorApp:
     def __init__(self, root):
         self.root = root
+        root.resizable(False, False)
         # width = self.root.winfo_screenwidth()
         # height = self.root.winfo_screenheight()
         # self.root.geometry("%dx%d" % (width, height))
         self.root.geometry("1280x800")
         self.root.title("Кончный Автомат Холодильника")
-
-        self.temp_outside = 25;
+        self.products = []
+        self.temp_outside = 25
         self.refrigerator = Refrigerator(self.temp_outside)
         self.fsm = RefrigeratorFSM(self.refrigerator)
         self.timer = Timer(self.fsm)
         self.signaling = Signaling(self.fsm)
 
-        self.refrigerator_open_img = PhotoImage(file="refrigerator_open.png")
-        self.refrigerator_close_img = PhotoImage(file="refrigerator_close.png")
+        self.refrigerator_open_img = PhotoImage(file="refrigerator_open_new.png")
+        self.refrigerator_close_img = PhotoImage(file="refrigerator_close_new.PNG")
 
         self.temp_display_width = 80
         self.temp_display_height = 30
-        self.temp_display_x = 215
-        self.temp_display_y = 55
+        self.temp_display_x = 65
+        self.temp_display_y = 180
 
         container_frame = tk.Frame(root)
         container_frame.pack()
 
-        self.canvas = tk.Canvas(container_frame, width=512, height=512)
+        self.canvas = tk.Canvas(container_frame, width=512, height=800)
         self.canvas.pack(side=tk.LEFT)
 
+        control_display = tk.Frame(container_frame, width=300, height=512, bg="lightblue", bd=5, relief=tk.SUNKEN)
         control_frame = tk.Frame(container_frame,width=300,height=512)
-        #control_frame = tk.Frame(container_frame)
-        control_frame.pack_propagate(False)
         control_frame.pack(side=tk.RIGHT,pady=10, padx=10)
+        control_display.pack(side=tk.RIGHT,pady=10, padx=10)
+
+
+        main_menu = tk.Frame(control_display)
+        main_menu.pack()
+        is_visible_main_menu = True
+        messages_frame = tk.Frame(main_menu,bg="white", width=360, height=50)
+        messages_frame.pack()
+        #messages_frame_head_label = tk.Label(messages_frame, text="Просрочка", highlightcolor="black", width=300)
+        #messages_frame_head_label.pack()
+        button1 = tk.Button(main_menu, text="Добавить Продукты",
+                           highlightthickness=1, bd=1, fg="black")
+        button1.pack(anchor=tk.W,fill=tk.X)
+        button2 = tk.Button(main_menu, text="Убрать Продукты",
+                           highlightthickness=1, bd=1, fg="black")
+        button2.pack(anchor=tk.W,fill=tk.X)
+        button3 = tk.Button(main_menu, text="Посмотреть Продукты",
+                           highlightthickness=1, bd=1, fg="black")
+        button3.pack(anchor=tk.W,fill=tk.X)
+
+
+
+
+
+
+
+        add_menu = tk.Frame(control_display)
+        is_visible_add_menu = False
+        # Метки и поля ввода
+        tk.Label(add_menu, text="Название:").pack(anchor='w')
+        self.name_entry = tk.Entry(add_menu)
+        self.name_entry.pack(fill='x', pady=5)
+
+        tk.Label(add_menu, text="Категория:").pack(anchor='w')
+        self.category_entry = tk.Entry(add_menu)
+        self.category_entry.pack(fill='x', pady=5)
+
+        tk.Label(add_menu, text="Срок годности до:").pack(anchor='w')
+        self.expiry_date_entry = tk.Entry(add_menu)
+        self.expiry_date_entry.pack(fill='x', pady=5)
+
+        tk.Label(add_menu, text="Количество:").pack(anchor='w')
+        self.quantity_entry = tk.Entry(add_menu)
+        self.quantity_entry.pack(fill='x', pady=5)
+
+        tk.Label(add_menu, text="Масса (кг):").pack(anchor='w')
+        self.weight_entry = tk.Entry(add_menu)
+        self.weight_entry.pack(fill='x', pady=5)
+
+        # Кнопка для сохранения продукта
+        self.save_button = tk.Button(add_menu, text="Сохранить продукт", command=self.save_product)
+        self.save_button.pack(pady=10)
+
+        # Фрейм для таблицы и кнопок
+        table_frame = tk.Frame(add_menu)
+        table_frame.pack(pady=10, fill='both', expand=True)
+
+        # Таблица для отображения продуктов
+        self.tree = ttk.Treeview(table_frame, columns=("name", "category", "expiry_date", "quantity", "weight"),
+                                 show='headings')
+        self.tree.heading("name", text="Название")
+        self.tree.heading("category", text="Категория")
+        self.tree.heading("expiry_date", text="Срок годности до")
+        self.tree.heading("quantity", text="Количество")
+        self.tree.heading("weight", text="Масса (кг)")
+        self.tree.pack(fill='both', expand=True)
+
+        # Фрейм для кнопок загрузки и сохранения
+        button_frame = tk.Frame(add_menu)
+        button_frame.pack(pady=10)
+
+        # Кнопки для загрузки и сохранения данных
+        # self.load_button = tk.Button(button_frame, text="Загрузить из JSON", command=self.load_products)
+        # self.load_button.pack(side='left', padx=10)
+        # self.save_to_json_button = tk.Button(button_frame, text="Сохранить в JSON", command=self.save_products_to_json)
+        # self.save_to_json_button.pack(side='left', padx=10)
+
+        button_frame = tk.Frame(add_menu)
+        button_frame.pack(pady=10)
+
+
+
+
+
+
 
         self.state_label = tk.Label(control_frame, text=f"Состояние: {self.fsm.state.name_ru}")
         self.state_label.pack(anchor=tk.W)
@@ -321,15 +441,25 @@ class RefrigeratorApp:
         self.temp_text = self.canvas.create_text(temp_text_x, temp_text_y,
                                                  text=f"{self.refrigerator.temperature:.0f}°C", fill='green')
 
-        status_indicator_x = 310
-        status_indicator_y = 55
-        status_indicator_width = 30
+        status_indicator_x = 36
+        status_indicator_y = 183
+        status_indicator_width = 25
         self.status_indicator = self.canvas.create_oval(
             status_indicator_x, status_indicator_y,
             status_indicator_x + status_indicator_width,
             status_indicator_y + status_indicator_width,
             fill='cyan'
         )
+
+    def toggle_visibility_add_menu(self):
+        global is_visible_add_menu
+        if is_visible_add_menu:
+            self.add_menu.pack_forget()  # Скрываем текстовое поле
+        else:
+            self.add_menu.pack()  # Отображаем текстовое поле
+        is_visible_add_menu = not is_visible_add_menu  # Переключаем состояние
+
+
 
     def update(self):
         self.draw()
@@ -385,7 +515,74 @@ class RefrigeratorApp:
         print(event.x, event.y)
 
 
+
+
+
+
+
+
+
+    def save_product(self):
+        name = self.name_entry.get()
+        category = self.category_entry.get()
+        expiry_date = self.expiry_date_entry.get()
+        quantity = self.quantity_entry.get()
+        weight = self.weight_entry.get()
+
+        try:
+            product = Product(name, category, expiry_date, quantity if quantity else None, weight if weight else None)
+            self.products.append(product)
+            self.update_table()
+            messagebox.showinfo("Успех", "Продукт успешно сохранен!")
+            self.clear_entries()
+        except ValueError as e:
+            messagebox.showerror("Ошибка", str(e))
+
+    def update_table(self):
+        for row in self.tree.get_children():
+            self.tree.delete(row)
+        for product in self.products:
+            self.tree.insert("", "end", values=(product.name, product.category, product.expiry_date, product.quantity, product.weight))
+
+    def clear_entries(self):
+        self.name_entry.delete(0, tk.END)
+        self.category_entry.delete(0, tk.END)
+        self.expiry_date_entry.delete(0, tk.END)
+        self.quantity_entry.delete(0, tk.END)
+        self.weight_entry.delete(0, tk.END)
+
+    def load_products(self):
+        try:
+            self.products = load_products_from_json('products.json')
+            self.update_table()
+            messagebox.showinfo("Успех", "Продукты успешно загружены!")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось загрузить продукты: {str(e)}")
+
+    def save_products_to_json(self):
+        try:
+            save_products_to_json(self.products, 'products.json')
+            messagebox.showinfo("Успех", "Продукты успешно сохранены в JSON файл!")
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось сохранить продукты: {str(e)}")
+
+
+
+
+
 if __name__ == "__main__":
     root = tk.Tk()
     app = RefrigeratorApp(root)
     root.mainloop()
+
+
+
+
+def save_products_to_json(products, filename):
+    with open(filename, 'w', encoding='utf-8') as f:
+        json.dump([product.to_dict() for product in products], f, ensure_ascii=False, indent=4)
+
+def load_products_from_json(filename):
+    with open(filename, 'r', encoding='utf-8') as f:
+        data = json.load(f)
+        return [Product.from_dict(item) for item in data]
