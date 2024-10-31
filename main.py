@@ -1,44 +1,13 @@
 import math
-from tkinter import messagebox, ttk
+import random
 import tkinter as tk
-from enum import Enum, auto
-from tkinter import PhotoImage
-import json
+from itertools import product
+
 import winsound
-
-
-
-class Product:
-    def __init__(self, name, category, expiry_date, quantity=None, weight=None):
-        self.name = name
-        self.category = category
-        self.expiry_date = expiry_date
-        if quantity and weight:
-            raise ValueError("Specify either quantity or weight, not both.")
-        if not quantity and not weight:
-            raise ValueError("Specify either quantity or weight.")
-        self.quantity = quantity
-        self.weight = weight
-
-    def to_dict(self):
-        return {
-            "name": self.name,
-            "category": self.category,
-            "expiry_date": self.expiry_date,
-            "quantity": self.quantity,
-            "weight": self.weight
-        }
-
-    @classmethod
-    def from_dict(cls, data):
-        return cls(
-            name=data["name"],
-            category=data["category"],
-            expiry_date=data["expiry_date"],
-            quantity=data.get("quantity"),
-            weight=data.get("weight")
-        )
-
+from datetime import datetime
+from enum import Enum, auto
+from tkinter import PhotoImage, messagebox
+from tkinter import ttk
 
 
 class Signaling:
@@ -52,7 +21,8 @@ class Signaling:
         if not self.fsm.state == State.OFF and ((self.fsm.state == State.THREAT_FAILURE) and not self.playing_audio):
             self.play_audio()
 
-        if self.fsm.state == State.OFF or ((not self.fsm.state == State.THREAT_FAILURE) and self.playing_audio and not self.fsm.refrigerator.is_door_open):
+        if self.fsm.state == State.OFF or ((
+                                                   not self.fsm.state == State.THREAT_FAILURE) and self.playing_audio and not self.fsm.refrigerator.is_door_open):
             self.stop_audio()
 
     def play_audio(self):
@@ -251,6 +221,7 @@ class Timer:
             self.fsm.send_signal(Signal.DOOR_OPEN_MORE_THAN_120)
         if self.fsm.state == State.OFF:
             self.stop()
+
     def start(self):
         self.is_started = True
         self.reset()
@@ -263,24 +234,244 @@ class Timer:
         self.time = 0
 
 
+class Product:
+    PRODUCTS = ["Молоко", "Яйца", "Колбаса", "Сыр", "Масло подсолнечное", "Варенье", "Пельмени", "Мясо"]
+
+    def __init__(self, name, expiry_date):
+        self.name = name
+        self.expiry_date = expiry_date
+
+    def __str__(self):
+        return f"{self.name}, {self.expiry_date}"
+
+    def __repr__(self):
+        return f"{self.name}, {self.expiry_date}"
+
+    def to_dict(self):
+        return {
+            "name": self.name,
+            "expiry_date": self.expiry_date,
+        }
+
+    def is_expired(self):
+        return datetime.strptime(self.expiry_date, "%d.%m.%Y") < datetime.now()
+
+    @classmethod
+    def from_dict(cls, data):
+        return cls(
+            name=data["name"],
+            expiry_date=data["expiry_date"],
+        )
+
+    @staticmethod
+    def validate_expiry_date(date_str):
+        try:
+            datetime.strptime(date_str, "%d.%m.%Y")
+            return True
+        except ValueError:
+            return False
+
+    @staticmethod
+    def validate_quantity(quantity):
+        try:
+            qty = int(quantity)
+            return qty > 0
+        except ValueError:
+            return False
+
+    @staticmethod
+    def validate_weight(weight):
+        try:
+            wgt = float(weight)
+            return wgt > 0
+        except ValueError:
+            return False
+
+
+class BaseProductWindow(tk.Toplevel):
+    def __init__(self, root, title):
+        super().__init__(root)
+        self.title(title)
+        self.geometry("400x400")
+        self.resizable(False, False)
+        self.grab_set()
+        self.focus_set()
+        self.transient(root)
+
+        self.main_frame = tk.Frame(self, pady=10, padx=10)
+        self.main_frame.pack(expand=True, fill=tk.BOTH)
+
+        self.validation_errors = {}
+
+    @staticmethod
+    def create_label_entry(label_text, parent):
+        frame = tk.Frame(parent)
+        frame.pack(fill=tk.X, pady=5)
+
+        label = tk.Label(frame, text=label_text)
+        label.pack(anchor="w")
+
+        entry = tk.Entry(frame)
+        entry.pack(fill=tk.X)
+
+        error_label = tk.Label(frame, text="", foreground="red")
+        error_label.pack(anchor="w")
+
+        return entry, error_label
+
+    def show_error(self, field, error_label, message):
+        self.validation_errors[field] = True
+        error_label.config(text=message)
+
+    def clear_error(self, field, error_label):
+        self.validation_errors.pop(field, None)
+        error_label.config(text="")
+
+    def validate_form(self):
+        return len(self.validation_errors) == 0
+
+
+class AddProductWindow(BaseProductWindow):
+    def __init__(self, root, on_add_callback):
+        self.on_add_callback = on_add_callback
+        super().__init__(root, "Добавление продукта")
+
+        product_frame = tk.Frame(self.main_frame)
+        product_frame.pack(fill=tk.X, pady=5)
+        tk.Label(product_frame, text="Выберите продукт:").pack(anchor="w")
+        self.product_combo = ttk.Combobox(product_frame, values=Product.PRODUCTS, state="readonly")
+        self.product_combo.pack(fill=tk.X)
+        self.product_combo.current(0)
+
+        self.expiry_entry, self.expiry_error = self.create_label_entry("Срок годности (ДД.ММ.ГГГГ):", self.main_frame)
+        self.expiry_entry.bind('<KeyRelease>', self.validate_expiry)
+
+        button_frame = tk.Frame(self.main_frame)
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
+
+        tk.Button(button_frame, text="Отмена", command=self.destroy).pack(side=tk.RIGHT, padx=5)
+        tk.Button(button_frame, text="Добавить", command=self.add_product).pack(side=tk.RIGHT)
+
+    def validate_expiry(self, event=None):
+        date_str = self.expiry_entry.get().strip()
+        if not date_str:
+            self.show_error('expiry', self.expiry_error, "Срок годности обязателен")
+        elif not Product.validate_expiry_date(date_str):
+            self.show_error('expiry', self.expiry_error, "Неверный формат даты")
+        else:
+            self.clear_error('expiry', self.expiry_error)
+
+
+    def add_product(self):
+        self.validate_expiry()
+
+        if not self.validate_form():
+            messagebox.showerror("Ошибка", "Пожалуйста, исправьте ошибки в форме")
+            return
+
+        try:
+            product = Product(
+                name=self.product_combo.get(),
+                expiry_date=self.expiry_entry.get().strip(),
+            )
+
+            self.on_add_callback(product)
+            self.destroy()
+
+        except Exception as e:
+            messagebox.showerror("Ошибка", f"Не удалось добавить продукт: {str(e)}")
+
+
+class RemoveProductWindow(BaseProductWindow):
+    def __init__(self, root, products, on_remove_callback):
+        self.products = products
+        self.on_remove_callback = on_remove_callback
+        super().__init__(root, "Удаление продукта")
+
+        products_frame = tk.Frame(self.main_frame)
+        products_frame.pack(fill=tk.BOTH, expand=True, pady=5)
+        tk.Label(products_frame, text="Выберите продукты для удаления:").pack(anchor="w")
+
+        self.tree = ttk.Treeview(products_frame, columns=("name", "expiry"), show="headings", selectmode="extended")
+
+        self.tree.heading("name", text="Название")
+        self.tree.heading("expiry", text="Срок годности")
+
+        self.tree.column("name", width=100)
+        self.tree.column("expiry", width=100)
+
+        scrollbar = tk.Scrollbar(products_frame, orient="vertical", command=self.tree.yview)
+        self.tree.configure(yscrollcommand=scrollbar.set)
+
+        self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+
+        button_frame = tk.Frame(self.main_frame)
+        button_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=10)
+
+        tk.Button(button_frame, text="Отмена", command=self.destroy).pack(side=tk.RIGHT, padx=5)
+        tk.Button(button_frame, text="Удалить выбранные", command=self.remove_products).pack(side=tk.RIGHT)
+
+        self.update_product_list()
+
+    def update_product_list(self):
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+
+        for product in self.products:
+            self.tree.insert("", "end", values=(
+                product.name,
+                product.expiry_date,
+            ))
+
+    def remove_products(self):
+        selected_items = self.tree.selection()
+        new_selection = []
+        result = []
+        if not selected_items:
+            messagebox.showwarning("Предупреждение", "Выберите продукты для удаления")
+            return
+
+        if messagebox.askyesno("Подтверждение", "Вы уверены, что хотите удалить выбранные продукты?"):
+            selected_products = []
+            for item in self.tree.get_children():
+                if item not in selected_items:
+                    new_selection.append(item)
+
+            for item in new_selection:
+                temp = self.tree.item(item, "values")
+                result.append(temp)
+            self.on_remove_callback(result)
+            self.destroy()
+
+
 class RefrigeratorApp:
     def __init__(self, root):
         self.root = root
-        root.resizable(False, False)
         # width = self.root.winfo_screenwidth()
         # height = self.root.winfo_screenheight()
         # self.root.geometry("%dx%d" % (width, height))
         self.root.geometry("1280x800")
         self.root.title("Кончный Автомат Холодильника")
-        self.products = []
+        self.products = self.get_products()
         self.temp_outside = 25
         self.refrigerator = Refrigerator(self.temp_outside)
         self.fsm = RefrigeratorFSM(self.refrigerator)
         self.timer = Timer(self.fsm)
         self.signaling = Signaling(self.fsm)
 
-        self.refrigerator_open_img = PhotoImage(file="refrigerator_open_new.png")
-        self.refrigerator_close_img = PhotoImage(file="refrigerator_close_new.PNG")
+        self.refrigerator_open_img = PhotoImage(file="refrigerator_open.png")
+        self.refrigerator_close_off_img = PhotoImage(file="refrigerator_off.png")
+        self.refrigerator_close_on_img = PhotoImage(file="refrigerator_on.png")
+        self.image_milk_path = PhotoImage(file="image_food/Empty.png")
+        self.image_kolb_path = PhotoImage(file="image_food/Empty.png")
+        self.image_egg_path = PhotoImage(file="image_food/Empty.png")
+        self.image_cheese_path = PhotoImage(file="image_food/Empty.png")
+        self.image_oil_path = PhotoImage(file="image_food/Empty.png")
+        self.image_jam_path = PhotoImage(file="image_food/Empty.png")
+        self.image_meat_path = PhotoImage(file="image_food/Empty.png")
+        self.image_pelmen_path = PhotoImage(file="image_food/Empty.png")
+
 
         self.temp_display_width = 80
         self.temp_display_height = 30
@@ -290,97 +481,14 @@ class RefrigeratorApp:
         container_frame = tk.Frame(root)
         container_frame.pack()
 
-        self.canvas = tk.Canvas(container_frame, width=512, height=800)
+        self.canvas = tk.Canvas(container_frame, width=600, height=800)
         self.canvas.pack(side=tk.LEFT)
 
-        control_display = tk.Frame(container_frame, width=300, height=512, bg="lightblue", bd=5, relief=tk.SUNKEN)
-        control_frame = tk.Frame(container_frame,width=300,height=512)
-        control_frame.pack(side=tk.RIGHT,pady=10, padx=10)
-        control_display.pack(side=tk.RIGHT,pady=10, padx=10)
+        right_side_frame = tk.Frame(container_frame, width=300, height=512)
+        right_side_frame.pack(anchor=tk.N, side=tk.RIGHT, pady=10, padx=10)
 
-
-        main_menu = tk.Frame(control_display)
-        main_menu.pack()
-        is_visible_main_menu = True
-        messages_frame = tk.Frame(main_menu,bg="white", width=360, height=50)
-        messages_frame.pack()
-        #messages_frame_head_label = tk.Label(messages_frame, text="Просрочка", highlightcolor="black", width=300)
-        #messages_frame_head_label.pack()
-        button1 = tk.Button(main_menu, text="Добавить Продукты",
-                           highlightthickness=1, bd=1, fg="black")
-        button1.pack(anchor=tk.W,fill=tk.X)
-        button2 = tk.Button(main_menu, text="Убрать Продукты",
-                           highlightthickness=1, bd=1, fg="black")
-        button2.pack(anchor=tk.W,fill=tk.X)
-        button3 = tk.Button(main_menu, text="Посмотреть Продукты",
-                           highlightthickness=1, bd=1, fg="black")
-        button3.pack(anchor=tk.W,fill=tk.X)
-
-
-
-
-
-
-
-        add_menu = tk.Frame(control_display)
-        is_visible_add_menu = False
-        # Метки и поля ввода
-        tk.Label(add_menu, text="Название:").pack(anchor='w')
-        self.name_entry = tk.Entry(add_menu)
-        self.name_entry.pack(fill='x', pady=5)
-
-        tk.Label(add_menu, text="Категория:").pack(anchor='w')
-        self.category_entry = tk.Entry(add_menu)
-        self.category_entry.pack(fill='x', pady=5)
-
-        tk.Label(add_menu, text="Срок годности до:").pack(anchor='w')
-        self.expiry_date_entry = tk.Entry(add_menu)
-        self.expiry_date_entry.pack(fill='x', pady=5)
-
-        tk.Label(add_menu, text="Количество:").pack(anchor='w')
-        self.quantity_entry = tk.Entry(add_menu)
-        self.quantity_entry.pack(fill='x', pady=5)
-
-        tk.Label(add_menu, text="Масса (кг):").pack(anchor='w')
-        self.weight_entry = tk.Entry(add_menu)
-        self.weight_entry.pack(fill='x', pady=5)
-
-        # Кнопка для сохранения продукта
-        self.save_button = tk.Button(add_menu, text="Сохранить продукт", command=self.save_product)
-        self.save_button.pack(pady=10)
-
-        # Фрейм для таблицы и кнопок
-        table_frame = tk.Frame(add_menu)
-        table_frame.pack(pady=10, fill='both', expand=True)
-
-        # Таблица для отображения продуктов
-        self.tree = ttk.Treeview(table_frame, columns=("name", "category", "expiry_date", "quantity", "weight"),
-                                 show='headings')
-        self.tree.heading("name", text="Название")
-        self.tree.heading("category", text="Категория")
-        self.tree.heading("expiry_date", text="Срок годности до")
-        self.tree.heading("quantity", text="Количество")
-        self.tree.heading("weight", text="Масса (кг)")
-        self.tree.pack(fill='both', expand=True)
-
-        # Фрейм для кнопок загрузки и сохранения
-        button_frame = tk.Frame(add_menu)
-        button_frame.pack(pady=10)
-
-        # Кнопки для загрузки и сохранения данных
-        # self.load_button = tk.Button(button_frame, text="Загрузить из JSON", command=self.load_products)
-        # self.load_button.pack(side='left', padx=10)
-        # self.save_to_json_button = tk.Button(button_frame, text="Сохранить в JSON", command=self.save_products_to_json)
-        # self.save_to_json_button.pack(side='left', padx=10)
-
-        button_frame = tk.Frame(add_menu)
-        button_frame.pack(pady=10)
-
-
-
-
-
-
+        control_frame = tk.Frame(right_side_frame)
+        control_frame.pack()
 
         self.state_label = tk.Label(control_frame, text=f"Состояние: {self.fsm.state.name_ru}")
         self.state_label.pack(anchor=tk.W)
@@ -407,15 +515,161 @@ class RefrigeratorApp:
         for text, command in buttons:
             tk.Button(control_frame, text=text, command=command).pack(fill=tk.X)
 
+        tk.Button(control_frame, text="Добавить продукт", command=self.add_product).pack(fill=tk.X)
+        tk.Button(control_frame, text="Удалить продукт", command=self.remove_product).pack(fill=tk.X)
+
+        self.expired_products_frame = tk.Frame(right_side_frame, pady=10)
+        self.expired_products_frame.pack(fill=tk.X)
+
+        self.expired_products_label = tk.Label(self.expired_products_frame, text="Просроченные продукты:")
+        self.expired_products_label.pack(anchor=tk.W)
+
+        for product in self.products:
+            if datetime.strptime(product.expiry_date, "%d.%m.%Y")  < datetime.now():
+                tk.Label(self.expired_products_frame, text=f"{product.name} | {product.expiry_date}").pack(anchor=tk.W)
+
         self.canvas.bind("<Button-1>", self.on_click)
 
         self.draw()
         self.update()
 
+    def draw_food(self):
+        food_position_x = 50
+        food_position_y = 340
+        # Размещаем изображение на определенных координатах (x=100, y=100)
+        self.canvas.create_image(food_position_x, food_position_y, anchor=tk.NW, image=self.image_milk_path)
+        self.canvas.create_image(food_position_x + 50, food_position_y, anchor=tk.NW, image=self.image_egg_path)
+        self.canvas.create_image(food_position_x + (50 * 2), food_position_y, anchor=tk.NW, image=self.image_kolb_path)
+        self.canvas.create_image(food_position_x, food_position_y + 100, anchor=tk.NW, image=self.image_jam_path)
+        self.canvas.create_image(food_position_x + 50, food_position_y + 100, anchor=tk.NW, image=self.image_oil_path)
+        self.canvas.create_image(food_position_x + (50 * 2), food_position_y + 100, anchor=tk.NW,
+                                 image=self.image_cheese_path)
+
+        self.canvas.create_image(food_position_x + 5, food_position_y + 210, anchor=tk.NW,
+                                 image=self.image_pelmen_path)
+        self.canvas.create_image(food_position_x + 5, food_position_y + 290, anchor=tk.NW,
+                                 image=self.image_meat_path)
+
+    def update_food(self):
+        PRODUCTS = ["Молоко", "Яйца", "Колбаса", "Сыр", "Масло подсолнечное", "Варенье", "Пельмени", "Мясо"]
+        count_milk = len([prod for prod in self.products if prod.name == PRODUCTS[0]])
+        count_egg = len([prod for prod in self.products if prod.name == PRODUCTS[1]])
+        count_kolb = len([prod for prod in self.products if prod.name == PRODUCTS[2]])
+        count_cheese = len([prod for prod in self.products if prod.name == PRODUCTS[3]])
+        count_oil = len([prod for prod in self.products if prod.name == PRODUCTS[4]])
+        count_jam = len([prod for prod in self.products if prod.name == PRODUCTS[5]])
+        count_pelmen = len([prod for prod in self.products if prod.name == PRODUCTS[6]])
+        count_meat = len([prod for prod in self.products if prod.name == PRODUCTS[7]])
+
+        if count_milk == 0:
+            self.image_milk_path = PhotoImage(file="image_food/Empty.png")
+        elif count_milk == 1:
+            self.image_milk_path = PhotoImage(file="image_food/placeholder.png")
+        elif count_milk == 2:
+            self.image_milk_path = PhotoImage(file="image_food/placeholder2.png")
+        elif count_milk >= 3:
+            self.image_milk_path = PhotoImage(file="image_food/placeholder3.png")
+
+        if count_egg == 0:
+            self.image_egg_path = PhotoImage(file="image_food/Empty.png")
+        elif count_egg == 1:
+            self.image_egg_path = PhotoImage(file="image_food/placeholder.png")
+        elif count_egg == 2:
+            self.image_egg_path = PhotoImage(file="image_food/placeholder2.png")
+        elif count_egg >= 3:
+            self.image_egg_path = PhotoImage(file="image_food/placeholder3.png")
+
+        if count_kolb == 0:
+            self.image_kolb_path = PhotoImage(file="image_food/Empty.png")
+        elif count_kolb == 1:
+            self.image_kolb_path = PhotoImage(file="image_food/placeholder.png")
+        elif count_kolb == 2:
+            self.image_kolb_path = PhotoImage(file="image_food/placeholder2.png")
+        elif count_kolb >= 3:
+            self.image_kolb_path = PhotoImage(file="image_food/placeholder3.png")
+
+        if count_cheese == 0:
+            self.image_cheese_path = PhotoImage(file="image_food/Empty.png")
+        elif count_cheese == 1:
+            self.image_cheese_path = PhotoImage(file="image_food/placeholder.png")
+        elif count_cheese == 2:
+            self.image_cheese_path = PhotoImage(file="image_food/placeholder2.png")
+        elif count_cheese >= 3:
+            self.image_cheese_path = PhotoImage(file="image_food/placeholder3.png")
+
+        if count_oil == 0:
+            self.image_oil_path = PhotoImage(file="image_food/Empty.png")
+        elif count_oil == 1:
+            self.image_oil_path = PhotoImage(file="image_food/placeholder.png")
+        elif count_oil == 2:
+            self.image_oil_path = PhotoImage(file="image_food/placeholder2.png")
+        elif count_oil >= 3:
+            self.image_oil_path = PhotoImage(file="image_food/placeholder3.png")
+
+        if count_jam == 0:
+            self.image_jam_path = PhotoImage(file="image_food/Empty.png")
+        elif count_jam == 1:
+            self.image_jam_path = PhotoImage(file="image_food/placeholder.png")
+        elif count_jam == 2:
+            self.image_jam_path = PhotoImage(file="image_food/placeholder2.png")
+        elif count_jam >= 3:
+            self.image_jam_path = PhotoImage(file="image_food/placeholder3.png")
+
+        if count_meat == 0:
+            self.image_meat_path = PhotoImage(file="image_food/Empty.png")
+        elif count_meat == 1:
+            self.image_meat_path = PhotoImage(file="image_food/placeholder_freezer.png")
+        elif count_meat == 2:
+            self.image_meat_path = PhotoImage(file="image_food/placeholder_freezer.png")
+        elif count_meat >= 3:
+            self.image_meat_path = PhotoImage(file="image_food/placeholder_freezer.png")
+
+        if count_pelmen == 0:
+            self.image_pelmen_path = PhotoImage(file="image_food/Empty.png")
+        elif count_pelmen == 1:
+            self.image_pelmen_path = PhotoImage(file="image_food/placeholder_freezer.png")
+        elif count_pelmen == 2:
+            self.image_pelmen_path = PhotoImage(file="image_food/placeholder_freezer.png")
+        elif count_pelmen >= 3:
+            self.image_pelmen_path = PhotoImage(file="image_food/placeholder_freezer.png")
+
     def draw(self):
         self.canvas.delete('all')
 
         self.draw_refrigerator()
+
+    def draw_products_expired(self):
+        for widget in self.expired_products_frame.winfo_children():
+            widget.destroy()
+
+        self.expired_products_label = tk.Label(self.expired_products_frame, text="Просроченные продукты:")
+        self.expired_products_label.pack(anchor=tk.W)
+
+        for product in self.products:
+            if datetime.strptime(product.expiry_date, "%d.%m.%Y")  < datetime.now():
+                tk.Label(self.expired_products_frame, text=f"{product.name} | {product.expiry_date}").pack(anchor=tk.W)
+
+    def add_product(self):
+        AddProductWindow(self.root, on_add_callback = lambda value: self.products.append(value))
+        self.draw_products_expired()
+
+
+    def remove_product(self):
+        products = self.products
+        RemoveProductWindow(self.root, products, on_remove_callback  = lambda value: self.remove_product_callback(value))
+        self.draw_products_expired()
+
+    def remove_product_callback(self, product):
+        self.products.clear()
+        for item in product:
+            self.products.append(Product(item[0], item[1]))
+
+
+    def get_products(self):
+        return [Product(name, f"01.01.20{random.randint(23, 25)}") for name in Product.PRODUCTS]
+
+    def get_expired_products(self):
+        return [product for product in self.get_products() if product.is_expired()]
 
     def draw_refrigerator(self):
         if self.refrigerator.is_door_open:
@@ -427,7 +681,8 @@ class RefrigeratorApp:
         self.canvas.create_image(0, 0, anchor=tk.NW, image=self.refrigerator_open_img)
 
     def draw_close_door(self):
-        self.canvas.create_image(0, 0, anchor=tk.NW, image=self.refrigerator_close_img)
+        self.canvas.create_image(0, 0, anchor=tk.NW,
+                                 image=self.refrigerator_close_on_img if self.refrigerator.is_turn_on else self.refrigerator_close_off_img)
 
         self.temp_display = self.canvas.create_rectangle(
             self.temp_display_x, self.temp_display_y,
@@ -441,25 +696,15 @@ class RefrigeratorApp:
         self.temp_text = self.canvas.create_text(temp_text_x, temp_text_y,
                                                  text=f"{self.refrigerator.temperature:.0f}°C", fill='green')
 
-        status_indicator_x = 36
-        status_indicator_y = 183
-        status_indicator_width = 25
-        self.status_indicator = self.canvas.create_oval(
-            status_indicator_x, status_indicator_y,
-            status_indicator_x + status_indicator_width,
-            status_indicator_y + status_indicator_width,
-            fill='cyan'
-        )
-
-    def toggle_visibility_add_menu(self):
-        global is_visible_add_menu
-        if is_visible_add_menu:
-            self.add_menu.pack_forget()  # Скрываем текстовое поле
-        else:
-            self.add_menu.pack()  # Отображаем текстовое поле
-        is_visible_add_menu = not is_visible_add_menu  # Переключаем состояние
-
-
+        # status_indicator_x = 36
+        # status_indicator_y = 183
+        # status_indicator_width = 25
+        # self.status_indicator = self.canvas.create_oval(
+        #     status_indicator_x, status_indicator_y,
+        #     status_indicator_x + status_indicator_width,
+        #     status_indicator_y + status_indicator_width,
+        #     fill='cyan'
+        # )
 
     def update(self):
         self.draw()
@@ -468,16 +713,21 @@ class RefrigeratorApp:
         self.temp_label.config(text=f"Текущая температура: {self.refrigerator.temperature:.0f}°C")
         self.target_temp_label.config(text=f"Заданная температура: {self.refrigerator.target_temperature:.0f}°C")
 
+        self.update_food()
+        if self.refrigerator.is_door_open:
+            self.draw_food()
+
         if self.refrigerator.temperature <= 0:
             color = 'cyan'
         else:
             color = 'lightgreen'
         self.canvas.itemconfig(self.temp_text, fill=color)
 
-        if  self.fsm.state == State.OFF or self.fsm.state == State.MALFUNCTION:
-            self.canvas.itemconfig(self.status_indicator, fill='white')
-        elif  self.fsm.state != State.OFF or  self.fsm.state != State.MALFUNCTION:
-            self.canvas.itemconfig(self.status_indicator, fill='green')
+        # if  self.fsm.state == State.OFF or self.fsm.state == State.MALFUNCTION:
+        #     self.canvas.itemconfig(self.status_indicator, fill='white')
+        # elif  self.fsm.state != State.OFF or  self.fsm.state != State.MALFUNCTION:
+        #     self.canvas.itemconfig(self.status_indicator, fill='green')
+        self.draw_products_expired()
 
         self.fsm.update()
         self.timer.update()
@@ -499,7 +749,7 @@ class RefrigeratorApp:
 
     def turn_on(self):
         self.fsm.send_signal(Signal.TURN_ON)
-        if  self.refrigerator.is_door_open:
+        if self.refrigerator.is_door_open:
             self.timer.start()
 
     def turn_off(self):
@@ -515,74 +765,7 @@ class RefrigeratorApp:
         print(event.x, event.y)
 
 
-
-
-
-
-
-
-
-    def save_product(self):
-        name = self.name_entry.get()
-        category = self.category_entry.get()
-        expiry_date = self.expiry_date_entry.get()
-        quantity = self.quantity_entry.get()
-        weight = self.weight_entry.get()
-
-        try:
-            product = Product(name, category, expiry_date, quantity if quantity else None, weight if weight else None)
-            self.products.append(product)
-            self.update_table()
-            messagebox.showinfo("Успех", "Продукт успешно сохранен!")
-            self.clear_entries()
-        except ValueError as e:
-            messagebox.showerror("Ошибка", str(e))
-
-    def update_table(self):
-        for row in self.tree.get_children():
-            self.tree.delete(row)
-        for product in self.products:
-            self.tree.insert("", "end", values=(product.name, product.category, product.expiry_date, product.quantity, product.weight))
-
-    def clear_entries(self):
-        self.name_entry.delete(0, tk.END)
-        self.category_entry.delete(0, tk.END)
-        self.expiry_date_entry.delete(0, tk.END)
-        self.quantity_entry.delete(0, tk.END)
-        self.weight_entry.delete(0, tk.END)
-
-    def load_products(self):
-        try:
-            self.products = load_products_from_json('products.json')
-            self.update_table()
-            messagebox.showinfo("Успех", "Продукты успешно загружены!")
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось загрузить продукты: {str(e)}")
-
-    def save_products_to_json(self):
-        try:
-            save_products_to_json(self.products, 'products.json')
-            messagebox.showinfo("Успех", "Продукты успешно сохранены в JSON файл!")
-        except Exception as e:
-            messagebox.showerror("Ошибка", f"Не удалось сохранить продукты: {str(e)}")
-
-
-
-
-
 if __name__ == "__main__":
     root = tk.Tk()
     app = RefrigeratorApp(root)
     root.mainloop()
-
-
-
-
-def save_products_to_json(products, filename):
-    with open(filename, 'w', encoding='utf-8') as f:
-        json.dump([product.to_dict() for product in products], f, ensure_ascii=False, indent=4)
-
-def load_products_from_json(filename):
-    with open(filename, 'r', encoding='utf-8') as f:
-        data = json.load(f)
-        return [Product.from_dict(item) for item in data]
